@@ -79,6 +79,7 @@ def monitor_font(size, bold=False):
 
 
 FONT_BIG = monitor_font(36, bold=True)
+FONT_TEMP = monitor_font(88, bold=True)
 FONT_MED = monitor_font(28, bold=True)
 FONT_SMALL = monitor_font(21)
 FONT_TINY = monitor_font(16)
@@ -1216,8 +1217,8 @@ def draw_weather():
     data = weather.data
     text(LOCATION_NAME[:18].upper(), 25, 105, FONT_BIG, BRIGHT_AMBER)
     text("CURRENT CONDITIONS", 25, 160, FONT_SMALL, DIM_AMBER)
-    text(shown(data.get("temp"), " F"), 25, 185, FONT_BIG)
-    text(data.get("conditions", "LOADING...")[:18], 25, 230, FONT_MED)
+    text(shown(data.get("temp"), " F"), 25, 178, FONT_TEMP, BRIGHT_AMBER)
+    text(data.get("conditions", "LOADING...")[:18], 25, 292, FONT_MED)
     text("WIND", 330, 160, FONT_SMALL, DIM_AMBER)
     text(f"{compass(data.get('wind_dir'))} {shown(data.get('wind'), ' MPH')}", 330, 185, FONT_MED)
     text("HUMIDITY", 330, 235, FONT_SMALL, DIM_AMBER)
