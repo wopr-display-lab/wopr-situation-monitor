@@ -108,14 +108,6 @@ The program keeps compact daily ADS-B summaries in:
 
 These include unique aircraft, recognized military aircraft, peak message rate, closest contact, and total messages. Individual raw ADS-B messages are not archived.
 
-## Privacy before publishing
-
-Before placing this project in a public repository:
-
-- Replace the exact home coordinates with documented example values.
-- Check screenshots for reflections, names, addresses, or other personal details.
-- Do not publish archive files unless their contents have been reviewed.
-- Never add SSH passwords, private keys, or service credentials.
 
 ## Notes
 
