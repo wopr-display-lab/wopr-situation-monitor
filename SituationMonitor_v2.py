@@ -29,6 +29,16 @@ CONTACT_TTL = 90
 RADAR_RANGE_NM = 50
 AIRSPACE_METER_MAX = 20
 TRAIL_SECONDS = 120
+ATTRACT_CHAR_SECONDS = 0.035
+ATTRACT_LINE_PAUSE = 0.20
+ATTRACT_HOLD_SECONDS = 1.20
+ATTRACT_MESSAGES = (
+    "ESTABLISHING STRATEGIC DATA LINKS",
+    "CORRELATING AIR / ORBITAL TRACKS",
+    "EVALUATING ATMOSPHERIC CONDITIONS",
+    "SEARCHING FOR PATTERNS",
+    "NO IMMEDIATE THREATS DETECTED",
+)
 ARCHIVE_DIR = Path.home() / "SituationMonitor_archive"
 SCREENSHOT_REQUEST = ARCHIVE_DIR / "CAPTURE_SCREENSHOT"
 
@@ -1077,7 +1087,8 @@ def draw_radar():
     header("AIRBORNE TRACKING / ADS-B", 2)
     panel((18, 96, 443, 338))
     panel((475, 96, 307, 338))
-    cx, cy, radius = 300, 265, 155
+    # Geometric center of the 443 x 338 radar panel at (18, 96).
+    cx, cy, radius = 240, 265, 155
     for r in (40, 80, 120, 155):
         pygame.draw.circle(screen, DIM_AMBER, (cx, cy), r, 1)
     line(DIM_AMBER, (cx - radius, cy), (cx + radius, cy))
@@ -1378,21 +1389,31 @@ def draw_attract():
     header("AUTONOMOUS PATTERN ANALYSIS", 0)
     panel((18, 100, 764, 334))
     elapsed = time.monotonic() - attract_started
-    messages = (
-        "ESTABLISHING STRATEGIC DATA LINKS",
-        "CORRELATING AIR / ORBITAL TRACKS",
-        "EVALUATING ATMOSPHERIC CONDITIONS",
-        "SEARCHING FOR PATTERNS",
-        "NO IMMEDIATE THREATS DETECTED",
-    )
-    for row, message in enumerate(messages):
-        color = BRIGHT_AMBER if elapsed > row * .8 else DIM_AMBER
-        prefix = ">" if elapsed > row * .8 else "_"
-        text(f"{prefix} {message}", 55, 130 + row * 52, FONT_MED, color)
+    line_start = 0.0
+    for row, message in enumerate(ATTRACT_MESSAGES):
+        typing_time = len(message) * ATTRACT_CHAR_SECONDS
+        if elapsed >= line_start:
+            characters = min(
+                len(message),
+                max(0, int((elapsed - line_start) / ATTRACT_CHAR_SECONDS) + 1),
+            )
+            rendered = message[:characters]
+            typing = characters < len(message)
+            cursor = "_" if typing and int(elapsed * 5) % 2 == 0 else ""
+            text(f"> {rendered}{cursor}", 55, 130 + row * 52,
+                 FONT_MED, BRIGHT_AMBER)
+        line_start += typing_time + ATTRACT_LINE_PAUSE
     text(f"TRACKS {len(contacts_in_range()):02d}   RX {feed.rate:05.1f}   "
          f"KP {space_weather.data.get('kp', 0):.1f}",
          55, 405, FONT_SMALL, DIM_AMBER)
     bottom("WOPR AUTOMATED ANALYSIS IN PROGRESS")
+
+
+ATTRACT_DURATION = (
+    sum(len(message) * ATTRACT_CHAR_SECONDS + ATTRACT_LINE_PAUSE
+        for message in ATTRACT_MESSAGES)
+    + ATTRACT_HOLD_SECONDS
+)
 
 
 page = 1
@@ -1432,11 +1453,14 @@ try:
                 current_index = -1
             next_index = (current_index + 1) % len(rotation_pages)
             page = rotation_pages[next_index]
+            change_time = time.monotonic()
             if next_index == 0:
-                attract_started = time.monotonic()
-                attract_until = attract_started + 6
-            page_changed_at = time.monotonic()
-            next_page_at = time.monotonic() + PAGE_SECONDS
+                attract_started = change_time
+                attract_until = attract_started + ATTRACT_DURATION
+                next_page_at = attract_until + PAGE_SECONDS
+            else:
+                next_page_at = change_time + PAGE_SECONDS
+            page_changed_at = change_time
         feed.update()
         weather.update()
         intelligence.update()
