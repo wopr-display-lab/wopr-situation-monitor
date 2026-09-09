@@ -83,28 +83,6 @@ The application opens fullscreen and hides the mouse cursor. Press Escape to exi
 | F12 | Save a PNG screenshot |
 | Escape | Exit |
 
-F12 saves screenshots under:
-
-```text
-~/SituationMonitor_archive/screenshots/
-```
-
-No keyboard is required. While the desired page is visible, trigger a capture
-from the laptop over SSH:
-
-```powershell
-ssh pi@PI_ADDRESS "mkdir -p ~/SituationMonitor_archive && touch ~/SituationMonitor_archive/CAPTURE_SCREENSHOT"
-```
-
-The monitor notices this harmless marker file, saves the screenshot during its
-normal display loop, removes the marker, and continues running. No process
-signals or kill commands are used.
-
-To retrieve all screenshots from a laptop, run an `scp` command using the Pi's username and address. For example:
-
-```powershell
-scp "pi@PI_ADDRESS:SituationMonitor_archive/screenshots/*.png" .
-```
 
 ## Data sources
 
