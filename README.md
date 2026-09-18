@@ -14,9 +14,9 @@ not raw framebuffer captures.
 
 ![Airborne Tracking](screenshots/radar.png)
 
-![Previous orbital-page layout](screenshots/orbit.png)
+![SPACE WATCH running on the Raspberry Pi display](space-watch-live.jpg)
 
-The orbital preview above shows the previous layout; F7 now uses SPACE WATCH.
+SPACE WATCH above is a photograph of the current program running on the Raspberry Pi. The status and radar previews were reconstructed from display photographs.
 
 ## Screens
 
