@@ -22,9 +22,16 @@ WIDTH, HEIGHT = 800, 480
 FPS = 30
 PAGE_SECONDS = 15
 READSB_HOST, READSB_PORT = "127.0.0.1", 30003
-# Set these three values for the monitor's installation location.
-HOME_LAT, HOME_LON = 35.0000, -97.0000
-LOCATION_NAME = "YOUR LOCATION"
+READSB_JSON_PATHS = (
+    Path("/run/readsb/aircraft.json"),
+    Path("/var/run/readsb/aircraft.json"),
+    Path("/run/dump1090-fa/aircraft.json"),
+)
+READSB_JSON_URLS = (
+    "http://127.0.0.1/tar1090/data/aircraft.json",
+    "http://127.0.0.1/dump1090-fa/data/aircraft.json",
+)
+HOME_LAT, HOME_LON = 35.0000, -97.0000  # Example Oklahoma coordinates; configure for your location.
 CONTACT_TTL = 90
 RADAR_RANGE_NM = 50
 AIRSPACE_METER_MAX = 20
@@ -57,6 +64,37 @@ MILITARY_ICAO_RANGES = (
 MILITARY_CALLSIGN_PREFIXES = (
     "REACH", "RCH", "EVAC", "PAT", "CNV", "SAM", "SPAR",
 )
+
+# Common publicly documented ICAO type codes likely to appear over Oklahoma.
+# Unknown types still receive the generic wireframe instead of a false ID.
+AIRCRAFT_PROFILES = {
+    "C17": ("C-17A GLOBEMASTER III", "STRATEGIC TRANSPORT", "transport"),
+    "K35R": ("KC-135R STRATOTANKER", "AERIAL REFUELING", "tanker"),
+    "E3TF": ("E-3 SENTRY", "AIRBORNE WARNING / CONTROL", "awacs"),
+    "E3CF": ("E-3 SENTRY", "AIRBORNE WARNING / CONTROL", "awacs"),
+    "R135": ("RC-135 FAMILY", "RECONNAISSANCE", "tanker"),
+    "E6": ("E-6 MERCURY", "AIRBORNE COMMAND POST", "transport"),
+    "P8": ("P-8 POSEIDON", "MARITIME PATROL", "transport"),
+    "B52": ("B-52 STRATOFORTRESS", "STRATEGIC BOMBER", "bomber"),
+    "B1": ("B-1B LANCER", "STRATEGIC BOMBER", "swept"),
+    "B2": ("B-2 SPIRIT", "STEALTH BOMBER", "bomber"),
+    "A10": ("A-10 THUNDERBOLT II", "CLOSE AIR SUPPORT", "fighter"),
+    "A10": ("A-10 THUNDERBOLT II", "CLOSE AIR SUPPORT", "fighter"),
+    "F16": ("F-16 FIGHTING FALCON", "MULTIROLE FIGHTER", "fighter"),
+    "F15": ("F-15 EAGLE", "AIR SUPERIORITY FIGHTER", "fighter"),
+    "F18H": ("F/A-18 HORNET", "MULTIROLE FIGHTER", "fighter"),
+    "F18S": ("F/A-18 SUPER HORNET", "MULTIROLE FIGHTER", "fighter"),
+    "F35": ("F-35 LIGHTNING II", "MULTIROLE FIGHTER", "fighter"),
+    "T38": ("T-38 TALON", "SUPERSONIC TRAINER", "trainer"),
+    "T6": ("T-6 TEXAN II", "TRAINER", "trainer"),
+    "TEX2": ("T-6 TEXAN II", "TRAINER", "trainer"),
+    "BE20": ("C-12 HURON / KING AIR", "UTILITY TRANSPORT", "transport"),
+    "C130": ("C-130 HERCULES", "TACTICAL TRANSPORT", "transport"),
+    "C30J": ("C-130J SUPER HERCULES", "TACTICAL TRANSPORT", "transport"),
+    "H60": ("H-60 BLACK HAWK FAMILY", "UTILITY HELICOPTER", "helicopter"),
+    "UH60": ("UH-60 BLACK HAWK", "UTILITY HELICOPTER", "helicopter"),
+    "V22": ("V-22 OSPREY", "TILTROTOR TRANSPORT", "tiltrotor"),
+}
 
 pygame.init()
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN | pygame.NOFRAME)
@@ -126,7 +164,7 @@ def header(title, page):
     pygame.draw.rect(screen, DIM_AMBER, (17, 11, 7, 42))
     text("W.O.P.R. // SITUATION MONITOR", 32, 9, FONT_MED, BRIGHT_AMBER)
     text(f"{page:02d}  {title}", 32, 39, FONT_SMALL, AMBER)
-    text("F1 STATUS  F2 AIR  F3 1090  F4 WX+SPACE  F5 INTEL  F6 ORBIT  F7 SEC",
+    text("F1 STATUS F2 AIR F3 MIL-ID F4 1090 F5 WX F6 INTEL F7 ORBIT F8 SEC",
          20, 63, FONT_TINY, DIM_AMBER)
     pygame.draw.circle(screen, BRIGHT_AMBER, (684, 22), 4)
     text("ONLINE", 696, 13, FONT_TINY, BRIGHT_AMBER)
@@ -205,6 +243,13 @@ radar_trails = RadarTrails()
 
 def military_identity(ac):
     """Return a conservative public-ADS-B military label and evidence, or None."""
+    details = aircraft_metadata.aircraft.get(ac.get("icao", ""), {}) \
+        if "aircraft_metadata" in globals() else {}
+    try:
+        if int(details.get("dbFlags", 0)) & 1:
+            return "MIL", "READSB DATABASE"
+    except (TypeError, ValueError):
+        pass
     try:
         address = int(ac.get("icao", ""), 16)
     except (TypeError, ValueError):
@@ -327,6 +372,95 @@ class ReadsbFeed:
 
 
 feed = ReadsbFeed()
+
+
+class AircraftMetadataFeed:
+    """Enrich SBS tracks from readsb's local JSON without blocking the UI."""
+
+    def __init__(self):
+        self.aircraft = {}
+        self.next_fetch = 0
+        self.fetching = False
+        self.status = "AWAITING AIRCRAFT DATABASE"
+
+    def update(self):
+        if time.time() >= self.next_fetch and not self.fetching:
+            self.next_fetch = time.time() + 5
+            self.fetching = True
+            threading.Thread(target=self.fetch, daemon=True).start()
+
+    def fetch(self):
+        payload = None
+        source = None
+        try:
+            for path in READSB_JSON_PATHS:
+                try:
+                    with open(path, "r", encoding="utf-8") as json_file:
+                        payload = json.load(json_file)
+                    source = "LOCAL READSB DATABASE"
+                    break
+                except (OSError, ValueError):
+                    continue
+            if payload is None:
+                for url in READSB_JSON_URLS:
+                    try:
+                        request = urllib.request.Request(url, headers={"User-Agent": "WOPR/2"})
+                        with urllib.request.urlopen(request, timeout=0.5) as response:
+                            payload = json.load(response)
+                        source = "READSB DATA LINK"
+                        break
+                    except (OSError, ValueError):
+                        continue
+            if payload:
+                enriched = {}
+                for ac in payload.get("aircraft", []):
+                    icao = str(ac.get("hex", "")).lstrip("~").upper()
+                    if icao:
+                        enriched[icao] = ac
+                self.aircraft = enriched
+                self.status = source or "READSB DATA LINK"
+            else:
+                self.status = "TYPE DATABASE UNAVAILABLE"
+        finally:
+            self.fetching = False
+
+    def enrich(self, ac):
+        details = self.aircraft.get(ac.get("icao", ""), {})
+        merged = dict(ac)
+        merged.update({key: value for key, value in details.items()
+                       if value not in (None, "")})
+        return merged
+
+
+aircraft_metadata = AircraftMetadataFeed()
+
+
+def aircraft_profile(ac):
+    """Return display name, public role, drawing family and ID confidence."""
+    enriched = aircraft_metadata.enrich(ac)
+    type_code = str(enriched.get("t", "")).upper().strip()
+    if type_code in AIRCRAFT_PROFILES:
+        name, role, shape = AIRCRAFT_PROFILES[type_code]
+        return name, role, shape, "DATABASE CONFIRMED", type_code
+
+    description = str(enriched.get("desc", "")).upper().strip()
+    if description:
+        if "HELICOPTER" in description:
+            shape = "helicopter"
+        elif "TILTROTOR" in description:
+            shape = "tiltrotor"
+        elif "BOMBER" in description:
+            shape = "bomber"
+        elif "FIGHTER" in description:
+            shape = "fighter"
+        elif "TANKER" in description or "REFUEL" in description:
+            shape = "tanker"
+        elif "TRANSPORT" in description:
+            shape = "transport"
+        else:
+            shape = "generic"
+        return description[:31], "MILITARY AIRCRAFT", shape, "DATABASE CONFIRMED", type_code
+    return "MILITARY AIRCRAFT", "TYPE UNRESOLVED", "generic", "SIGNAL CLASSIFICATION", "----"
 
 
 class WeatherFeed:
@@ -597,14 +731,12 @@ class SECScoreFeed:
 
     @property
     def relevant_today(self):
-        return any(game["state"] == "in" or game["today"] for game in self.games)
+        today = datetime.now().astimezone().date()
+        return any(game["start"].date() == today for game in self.games)
 
     @property
     def rotation_active(self):
-        now = datetime.now()
-        football_season = now.month in (8, 9, 10, 11, 12, 1)
-        football_weekend = now.weekday() in (3, 4, 5)
-        return self.relevant_today or (football_season and football_weekend)
+        return self.relevant_today
 
     def fetch(self):
         try:
@@ -614,10 +746,19 @@ class SECScoreFeed:
                 "limit": 200,
                 "dates": f"{today:%Y%m%d}",
             })
-            payload = self.get_scoreboard(
-                "https://site.api.espn.com/apis/site/v2/sports/football/"
-                "college-football/scoreboard?" + query
-            )
+            payload = None
+            for host in ("site.api.espn.com", "site.web.api.espn.com"):
+                try:
+                    payload = self.get_scoreboard(
+                        f"https://{host}/apis/site/v2/sports/football/"
+                        "college-football/scoreboard?" + query)
+                    if not isinstance(payload.get("events"), list):
+                        raise ValueError("Scoreboard events missing")
+                    break
+                except (OSError, ValueError, TypeError, AttributeError):
+                    payload = None
+            if payload is None:
+                raise ValueError("Scoreboard unavailable")
             games = []
             for event in payload.get("events", []):
                 competition = (event.get("competitions") or [{}])[0]
@@ -675,7 +816,6 @@ class SatelliteFeed:
     SATELLITES = (
         ("ISS", 25544),
         ("TIANGONG", 48274),
-        ("HUBBLE", 20580),
     )
     ORBIT_CACHE = ARCHIVE_DIR / "satellite_orbits.json"
 
@@ -820,12 +960,21 @@ class SatelliteFeed:
                         short_name, ts
                     )
                     altitude, azimuth, _ = (satellite - observer).at(now).altaz()
+                    ground_track = []
+                    for offset in range(-12, 1):
+                        sample = ts.from_datetime(datetime.now(timezone.utc)
+                                                  + timedelta(minutes=offset))
+                        position = wgs84.subpoint(satellite.at(sample))
+                        ground_track.append((position.latitude.degrees,
+                                             position.longitude.degrees))
+                    position = wgs84.subpoint(satellite.at(now))
                     times, events = satellite.find_events(
                         observer, now, end, altitude_degrees=10.0
                     )
                 except (KeyError, ValueError, TypeError):
                     continue
                 next_time, max_elevation, pass_track = None, None, []
+                duration = None
                 event_list = list(zip(times, events))
                 for event_index, (event_time, event) in enumerate(event_list):
                     if event == 1:
@@ -863,6 +1012,10 @@ class SatelliteFeed:
                     "next": next_time,
                     "max": max_elevation,
                     "track": pass_track,
+                    "ground": (position.latitude.degrees, position.longitude.degrees),
+                    "ground_track": ground_track,
+                    "duration": duration,
+                    "epoch": satellite.epoch.utc_datetime(),
                 })
             if results:
                 self.data = results
@@ -1051,6 +1204,115 @@ def moon_state():
     return age, fraction, illumination, names[int((fraction * 8) + .5) % 8]
 
 
+def draw_aircraft_wireframe(shape, center=(237, 270), scale=1.0):
+    """Draw a cheap, crisp top-down aircraft schematic for the Pi."""
+    cx, cy = center
+
+    def points(coords):
+        return [(int(cx + x * scale), int(cy + y * scale)) for x, y in coords]
+
+    if shape == "helicopter":
+        pygame.draw.ellipse(screen, AMBER,
+                            (int(cx - 22 * scale), int(cy - 75 * scale),
+                             int(44 * scale), int(145 * scale)), 2)
+        line(AMBER, (cx, int(cy + 65 * scale)), (cx, int(cy + 120 * scale)), 2)
+        pygame.draw.circle(screen, BRIGHT_AMBER, (cx, cy), int(9 * scale), 2)
+        line(DIM_AMBER, (int(cx - 112 * scale), cy), (int(cx + 112 * scale), cy), 2)
+        line(DIM_AMBER, (cx, int(cy - 112 * scale)), (cx, int(cy + 112 * scale)), 2)
+        line(AMBER, (int(cx - 24 * scale), int(cy + 112 * scale)),
+             (int(cx + 24 * scale), int(cy + 112 * scale)), 2)
+        return
+
+    if shape == "tiltrotor":
+        outline = ((0, -125), (-18, -82), (-105, -20), (-102, 5), (-28, -8),
+                   (-20, 86), (-48, 108), (-45, 120), (0, 105),
+                   (45, 120), (48, 108), (20, 86), (28, -8), (102, 5),
+                   (105, -20), (18, -82))
+        pygame.draw.polygon(screen, AMBER, points(outline), 2)
+        for x in (-104, 104):
+            pygame.draw.circle(screen, BRIGHT_AMBER,
+                               (int(cx + x * scale), int(cy - 8 * scale)),
+                               int(29 * scale), 2)
+        return
+
+    outlines = {
+        "fighter": ((0, -132), (-15, -77), (-82, 18), (-76, 34), (-25, 13),
+                    (-18, 82), (-48, 113), (-43, 123), (0, 102), (43, 123),
+                    (48, 113), (18, 82), (25, 13), (76, 34), (82, 18), (15, -77)),
+        "trainer": ((0, -128), (-13, -60), (-70, 12), (-67, 26), (-18, 12),
+                    (-13, 91), (-39, 114), (0, 102), (39, 114), (13, 91),
+                    (18, 12), (67, 26), (70, 12), (13, -60)),
+        "swept": ((0, -127), (-17, -65), (-110, 51), (-101, 67), (-29, 34),
+                  (-20, 86), (-55, 112), (0, 101), (55, 112), (20, 86),
+                  (29, 34), (101, 67), (110, 51), (17, -65)),
+        "bomber": ((0, -120), (-20, -74), (-126, 28), (-119, 50), (-35, 21),
+                   (-22, 91), (-58, 111), (0, 102), (58, 111), (22, 91),
+                   (35, 21), (119, 50), (126, 28), (20, -74)),
+        "transport": ((0, -128), (-25, -86), (-39, -25), (-120, 33), (-114, 50),
+                      (-31, 23), (-22, 87), (-63, 112), (0, 102), (63, 112),
+                      (22, 87), (31, 23), (114, 50), (120, 33), (39, -25), (25, -86)),
+        "tanker": ((0, -132), (-20, -78), (-31, -12), (-121, 34), (-116, 48),
+                   (-28, 23), (-18, 92), (-55, 112), (0, 101), (55, 112),
+                   (18, 92), (28, 23), (116, 48), (121, 34), (31, -12), (20, -78)),
+        "awacs": ((0, -128), (-25, -82), (-38, -20), (-117, 29), (-112, 46),
+                  (-31, 22), (-20, 91), (-58, 113), (0, 102), (58, 113),
+                  (20, 91), (31, 22), (112, 46), (117, 29), (38, -20), (25, -82)),
+        "generic": ((0, -128), (-18, -70), (-91, 24), (-84, 41), (-25, 17),
+                    (-17, 89), (-49, 113), (0, 101), (49, 113), (17, 89),
+                    (25, 17), (84, 41), (91, 24), (18, -70)),
+    }
+    outline = outlines.get(shape, outlines["generic"])
+    pygame.draw.polygon(screen, AMBER, points(outline), 2)
+    line(DIM_AMBER, (cx, int(cy - 118 * scale)), (cx, int(cy + 98 * scale)), 1)
+    for offset in (-7, 7):
+        line(BRIGHT_AMBER, (int(cx + offset * scale), int(cy - 58 * scale)),
+             (int(cx + offset * scale), int(cy + 70 * scale)), 1)
+    if shape == "awacs":
+        pygame.draw.ellipse(screen, BRIGHT_AMBER,
+                            (int(cx - 55 * scale), int(cy - 15 * scale),
+                             int(110 * scale), int(28 * scale)), 2)
+
+
+def current_military_contact():
+    """Prefer the nearest positioned military contact for the ID page."""
+    candidates = [ac for ac in feed.aircraft.values() if military_identity(ac)]
+    positioned = [
+        (distance_bearing(ac["lat"], ac["lon"])[0], ac)
+        for ac in candidates if "lat" in ac and "lon" in ac
+    ]
+    if positioned:
+        return min(positioned, key=lambda item: item[0])[1]
+    return candidates[0] if candidates else None
+
+
+def draw_identification(ac):
+    header("CONTACT IDENTIFICATION / MILITARY", 3)
+    panel((18, 96, 438, 338))
+    panel((465, 96, 317, 338))
+    name, role, shape, confidence, type_code = aircraft_profile(ac)
+    draw_aircraft_wireframe(shape)
+    text("PUBLIC REFERENCE PROFILE", 86, 105, FONT_TINY, DIM_AMBER)
+    text("CONTACT IDENTIFIED", 478, 108, FONT_MED, MILITARY_RED)
+    line(MILITARY_RED, (478, 143), (765, 143), 2)
+    callsign = ac.get("callsign", "").strip() or "NO CALLSIGN"
+    text(callsign[:17], 478, 156, FONT_BIG, BRIGHT_AMBER)
+    for row, label_value in enumerate((
+            ("AIRFRAME", name), ("ROLE", role), ("ICAO TYPE", type_code),
+            ("HEX", ac.get("icao", "------")),
+            ("ALTITUDE", shown(ac.get("alt"), " FT")),
+            ("SPEED", shown(ac.get("speed"), " KT")),
+            ("COURSE", shown(ac.get("track"), " DEG")))):
+        label, value = label_value
+        y = 210 + row * 29
+        text(label, 478, y, FONT_TINY, DIM_AMBER)
+        text(str(value)[:22], 590, y - 2, FONT_TINY, BRIGHT_AMBER)
+    if "lat" in ac and "lon" in ac:
+        distance, bearing = distance_bearing(ac["lat"], ac["lon"])
+        text(f"RANGE {distance:.1f} NM / BEARING {bearing:03.0f}",
+             478, 416, FONT_TINY, AMBER)
+    bottom(confidence + " / " + aircraft_metadata.status)
+
+
 def draw_status():
     header("STRATEGIC STATUS / SYSTEM READINESS", 1)
     panel((18, 96, 764, 123))
@@ -1162,7 +1424,7 @@ def draw_radar():
 
 
 def draw_activity():
-    header("SIGNAL ACTIVITY / 1090 MHz", 3)
+    header("SIGNAL ACTIVITY / 1090 MHz", 4)
     panel((18, 92, 764, 62))
     panel((18, 158, 764, 166))
     panel((18, 333, 764, 101))
@@ -1220,13 +1482,13 @@ def draw_activity():
 
 
 def draw_weather():
-    header("ATMOSPHERIC ANALYSIS / LOCAL", 4)
+    header("ATMOSPHERIC ANALYSIS / LOCAL", 5)
     panel((18, 96, 300, 278))
     panel((323, 145, 220, 229))
     panel((550, 145, 232, 229))
     panel((18, 382, 764, 52))
     data = weather.data
-    text(LOCATION_NAME[:18].upper(), 25, 105, FONT_BIG, BRIGHT_AMBER)
+    text("NORMAN, OK", 25, 105, FONT_BIG, BRIGHT_AMBER)
     text("CURRENT CONDITIONS", 25, 160, FONT_SMALL, DIM_AMBER)
     text(shown(data.get("temp"), " F"), 25, 178, FONT_TEMP, BRIGHT_AMBER)
     text(data.get("conditions", "LOADING...")[:18], 25, 292, FONT_MED)
@@ -1259,7 +1521,7 @@ def draw_weather():
 
 
 def draw_intelligence():
-    header("STRATEGIC INTELLIGENCE / DATA LINK", 5)
+    header("STRATEGIC INTELLIGENCE / DATA LINK", 6)
     panel((18, 96, 764, 281))
     panel((18, 382, 764, 52))
     headlines = intelligence.headlines
@@ -1287,8 +1549,8 @@ def draw_intelligence():
     bottom(status)
 
 
-def draw_space():
-    header("ORBITAL SURVEILLANCE / SPACE TRACK", 6)
+def draw_space_legacy():
+    header("ORBITAL SURVEILLANCE / SPACE TRACK", 7)
     panel((18, 91, 430, 343))
     panel((454, 96, 328, 292))
     panel((454, 395, 328, 39))
@@ -1354,13 +1616,140 @@ def draw_space():
     bottom(space_state + "  |  " + archive_state)
 
 
+SPACE_GLOBE_CACHE = None
+
+
+def globe_point(lat, lon, cx=233, cy=268, radius=145):
+    """Orthographic Earth projection centered on the configured home."""
+    latitude, longitude = math.radians(lat), math.radians(lon - HOME_LON)
+    home = math.radians(HOME_LAT)
+    facing = (math.sin(home) * math.sin(latitude)
+              + math.cos(home) * math.cos(latitude) * math.cos(longitude))
+    if facing < 0:
+        return None
+    return (int(cx + radius * math.cos(latitude) * math.sin(longitude)),
+            int(cy - radius * (math.cos(home) * math.sin(latitude)
+                              - math.sin(home) * math.cos(latitude)
+                              * math.cos(longitude))))
+
+
+def space_globe():
+    """Cache the slowly changing daylight/graticule layer, not the markers."""
+    global SPACE_GLOBE_CACHE
+    minute = int(time.time() // 60)
+    if SPACE_GLOBE_CACHE and SPACE_GLOBE_CACHE[0] == minute:
+        return SPACE_GLOBE_CACHE[1]
+    layer = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    utc = datetime.now(timezone.utc)
+    declination = math.radians(23.44 * math.sin(
+        2 * math.pi * (utc.timetuple().tm_yday - 80) / 365.25))
+    sun_lon = 180 - 15 * (utc.hour + utc.minute / 60)
+    pygame.draw.circle(layer, (24, 15, 4), (233, 268), 145)
+    for lat in range(-88, 89, 3):
+        for lon in range(-180, 180, 3):
+            point = globe_point(lat, lon)
+            if point is None:
+                continue
+            daylight = (math.sin(math.radians(lat)) * math.sin(declination)
+                        + math.cos(math.radians(lat)) * math.cos(declination)
+                        * math.cos(math.radians(lon - sun_lon)))
+            color = (61, 36, 9) if daylight > 0 else (14, 10, 4)
+            pygame.draw.circle(layer, color, point, 4)
+    # Stylized geographic outline, deliberately low detail for the small CRT.
+    outlines = [
+        [(72,-168),(65,-168),(60,-150),(58,-137),(50,-128),(40,-124),
+         (32,-117),(23,-110),(15,-95),(9,-80),(20,-87),(21,-97),
+         (29,-97),(30,-85),(25,-81),(35,-76),(45,-65),(53,-55),
+         (60,-65),(70,-90),(72,-120),(72,-168)],
+        [(12,-72),(8,-60),(-5,-35),(-22,-42),(-40,-62),(-55,-68),
+         (-30,-71),(-5,-80),(12,-72)],
+        [(60,-44),(65,-53),(76,-65),(83,-35),(70,-20),(60,-44)],
+    ]
+    def projected_line(coords, color):
+        previous = None
+        for lat, lon in coords:
+            point = globe_point(lat, lon)
+            if previous and point:
+                pygame.draw.line(layer, color, previous, point, 1)
+            previous = point
+    for lat in range(-60, 90, 30):
+        projected_line([(lat, lon) for lon in range(-180,181,3)], VERY_DIM)
+    for lon in range(-180,180,30):
+        projected_line([(lat, lon) for lat in range(-90,91,3)], VERY_DIM)
+    for outline in outlines:
+        projected_line(outline, DIM_AMBER)
+    pygame.draw.circle(layer, AMBER, (233,268),145,2)
+    SPACE_GLOBE_CACHE = minute, layer
+    return layer
+
+
+def draw_space():
+    header("SPACE WATCH / EARTH & STATIONS", 7)
+    panel((18,96,430,338))
+    panel((460,96,322,338))
+    for index in range(24):
+        x, y = 30 + (index * 83) % 402, 110 + (index * 59) % 309
+        pygame.draw.circle(screen, VERY_DIM, (x,y),1)
+    screen.blit(space_globe(), (0,0))
+    text("OKLAHOMA / EARTH VIEW", 32,103,FONT_SMALL,DIM_AMBER)
+    pygame.draw.circle(screen, BRIGHT_AMBER, (233,268),4)
+    text("OK",241,270,FONT_TINY,BRIGHT_AMBER)
+    text("DAYLIGHT / NIGHT SHADING",32,410,FONT_TINY,DIM_AMBER)
+    now = datetime.now().astimezone()
+    age = time.time() - satellites.updated if satellites.updated else float("inf")
+    items = satellites.data[:2]
+    for row,item in enumerate(items):
+        color = BRIGHT_AMBER if row == 0 else AMBER
+        previous = None
+        for lat,lon in item.get("ground_track",[]):
+            point = globe_point(lat,lon)
+            if previous and point:
+                line(color,previous,point,2)
+            previous = point
+        ground = item.get("ground")
+        point = globe_point(*ground) if ground else None
+        if point:
+            pygame.draw.circle(screen,color,point,5)
+            pulse = 9 + int(2 * math.sin(time.monotonic()*2))
+            pygame.draw.circle(screen,color,point,pulse,1)
+            text(item["name"],point[0]+10,point[1]-18,FONT_TINY,color)
+        y = 112 + row * 66
+        text(item["name"],474,y,FONT_MED,color)
+        state = "TRACK DATA STALE" if age > 600 else (
+            "ABOVE OUR HORIZON" if item["alt"] > 0 else "BELOW OUR HORIZON")
+        text(state,474,y+35,FONT_TINY,DIM_AMBER)
+    line(VERY_DIM,(474,247),(768,247))
+    text("NEXT NEARBY PASS",474,258,FONT_SMALL,DIM_AMBER)
+    passes = [item for item in items if item.get("next") and item["next"] > now]
+    if passes and age <= 600:
+        upcoming = min(passes,key=lambda item:item["next"])
+        minutes = max(1,int((upcoming["next"]-now).total_seconds()/60))
+        text(upcoming["name"],474,291,FONT_MED,BRIGHT_AMBER)
+        timing = f"IN {minutes} MIN" if minutes < 120 else f"IN {minutes//60}H {minutes%60:02d}M"
+        text(timing,474,332,FONT_MED)
+        duration = upcoming.get("duration")
+        detail = upcoming["next"].strftime("%a %I:%M %p").upper()
+        text(detail,474,374,FONT_SMALL)
+        text(f"~{max(1,round(duration/60))} MIN / ABOVE 10 DEG" if duration
+             else "ABOVE 10 DEG / NOT VISIBILITY",474,413,FONT_TINY,DIM_AMBER)
+    else:
+        text("NO FRESH PASS DATA" if age > 600 else "NO PASS NEXT 36 HR",
+             474,300,FONT_SMALL,DIM_AMBER)
+        text("PASSES ARE NOT VISIBILITY",474,413,FONT_TINY,DIM_AMBER)
+    bottom(satellites.status + " / POSITIONS UPDATE EVERY 5 MIN")
+
+
 def draw_sec_scoreboard():
-    header("REGIONAL CONFLICT / SEC FOOTBALL", 7)
+    header("REGIONAL CONFLICT / SEC FOOTBALL", 8)
     panel((18, 96, 764, 322))
-    games = sec_scores.games[:3]
+    today = datetime.now().astimezone().date()
+    games = [game for game in sec_scores.games
+             if game["start"].date() == today][:3]
     if not games:
-        text("NO SEC GAMES SCHEDULED", 25, 135, FONT_MED, DIM_AMBER)
-        text("CHECKING THE NEXT SEVEN DAYS", 25, 180, FONT_SMALL, DIM_AMBER)
+        unavailable = not sec_scores.updated or "OFFLINE" in sec_scores.status or "UNAVAILABLE" in sec_scores.status
+        text("SEC SCHEDULE UNAVAILABLE" if unavailable else "NO SEC GAMES SCHEDULED TODAY",
+             25, 135, FONT_MED, DIM_AMBER)
+        text("F8 MANUAL / NOT IN AUTO ROTATION", 25, 180, FONT_SMALL, DIM_AMBER)
     for row, game in enumerate(games):
         y = 105 + row * 108
         live_color = BRIGHT_AMBER if game["state"] == "in" else AMBER
@@ -1380,7 +1769,7 @@ def draw_sec_scoreboard():
         if game["network"]:
             text(game["network"][:25], 430, y + 43, FONT_SMALL, DIM_AMBER)
         line(VERY_DIM, (25, y + 91), (775, y + 91))
-    rotation_note = "SEC FOOTBALL ROTATION ACTIVE" if sec_scores.rotation_active else "F7 MANUAL / ROTATION STANDBY"
+    rotation_note = "SEC FOOTBALL ROTATION ACTIVE" if sec_scores.rotation_active else "F8 MANUAL / ROTATION STANDBY"
     text(rotation_note, 25, 424, FONT_TINY, DIM_AMBER)
     bottom(sec_scores.status)
 
@@ -1436,17 +1825,23 @@ try:
                     screenshot_requested = True
                 elif event.key in (pygame.K_F1, pygame.K_F2, pygame.K_F3,
                                    pygame.K_F4, pygame.K_F5, pygame.K_F6,
-                                   pygame.K_F7):
+                                   pygame.K_F7, pygame.K_F8):
                     page = {pygame.K_F1: 1, pygame.K_F2: 2, pygame.K_F3: 3,
                             pygame.K_F4: 4, pygame.K_F5: 5,
-                            pygame.K_F6: 6, pygame.K_F7: 7}[event.key]
+                            pygame.K_F6: 6, pygame.K_F7: 7,
+                            pygame.K_F8: 8}[event.key]
+                    if page == 3 and current_military_contact() is None:
+                        page = 4
                     attract_until = 0
                     page_changed_at = time.monotonic()
                     next_page_at = time.monotonic() + PAGE_SECONDS
         if time.monotonic() >= next_page_at:
-            rotation_pages = [1, 2, 3, 4, 5, 6]
+            rotation_pages = [1, 2]
+            if current_military_contact() is not None:
+                rotation_pages.append(3)
+            rotation_pages.extend((4, 5, 6, 7))
             if sec_scores.rotation_active:
-                rotation_pages.append(7)
+                rotation_pages.append(8)
             try:
                 current_index = rotation_pages.index(page)
             except ValueError:
@@ -1469,13 +1864,22 @@ try:
         space_weather.update()
         archive.update()
         sec_scores.update()
+        aircraft_metadata.update()
+        military_contact = current_military_contact()
+        if page == 3 and military_contact is None:
+            page = 4
+            page_changed_at = time.monotonic()
+            next_page_at = time.monotonic() + PAGE_SECONDS
         if SCREENSHOT_REQUEST.exists():
             screenshot_requested = True
         if time.monotonic() < attract_until:
             draw_attract()
         else:
-            (draw_status, draw_radar, draw_activity, draw_weather,
-             draw_intelligence, draw_space, draw_sec_scoreboard)[page - 1]()
+            drawers = (draw_status, draw_radar,
+                       (lambda: draw_identification(military_contact)),
+                       draw_activity, draw_weather, draw_intelligence,
+                       draw_space, draw_sec_scoreboard)
+            drawers[page - 1]()
         crt_overlay(time.monotonic() - page_changed_at)
         if screenshot_requested:
             try:

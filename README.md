@@ -14,17 +14,20 @@ not raw framebuffer captures.
 
 ![Airborne Tracking](screenshots/radar.png)
 
-![Orbital Surveillance](screenshots/orbit.png)
+![Previous orbital-page layout](screenshots/orbit.png)
+
+The orbital preview above shows the previous layout; F7 now uses SPACE WATCH.
 
 ## Screens
 
 1. **Strategic Status** — system readiness, local time, uptime, live 50 NM aircraft count, activity level, 1090 MHz rate, and weather status.
 2. **Airborne Tracking** — fixed 50 NM ADS-B radar with two-minute trails, military-aircraft recognition, contact statistics, and the nearest current track.
-3. **Signal Activity** — readsb status, recently heard aircraft, message totals, and a live 60-second oscilloscope trace.
-4. **Atmospheric Analysis** — current local weather, wind, humidity, pressure, visibility, sunrise/sunset, severe-alert status, Moon phase, geomagnetic Kp, and solar radio flux.
-5. **Strategic Intelligence** — current U.S., technology, space, and defense headlines with DJIA, S&P 500, and NASDAQ movement.
-6. **Orbital Surveillance** — an Oklahoma-centered sky plot with ISS and Tiangong pass predictions. Hubble is requested from several public sources but may be absent when none supplies usable orbital elements.
-7. **Regional Conflict** — SEC football times, scores, and television coverage. This page joins automatic rotation only when relevant during football season; F7 always opens it manually.
+3. **Military Identification** — publicly available aircraft type information and a wireframe illustration. This page joins rotation while a recognized military contact is present.
+4. **Signal Activity** — readsb status, recently heard aircraft, message totals, and a live 60-second oscilloscope trace.
+5. **Atmospheric Analysis** — current local weather, wind, humidity, pressure, visibility, sunrise/sunset, severe-alert status, Moon phase, geomagnetic Kp, and solar radio flux.
+6. **Strategic Intelligence** — current U.S., technology, space, and defense headlines with DJIA, S&P 500, and NASDAQ movement.
+7. **SPACE WATCH** — an Earth view centered on the configured home location (Oklahoma by default), approximate daylight/night shading, ISS and Tiangong ground tracks, and a large next-nearby-pass card. Positions update every five minutes. Pass predictions are not promises of naked-eye visibility. Hubble is no longer tracked.
+8. **Regional Conflict** — SEC football times, scores, and television coverage. This page joins automatic rotation only when cached schedule data contains a game dated today in the local time zone; F8 always opens it manually. Yesterday's cached games cannot keep it active. The feed tries a second ESPN endpoint and reports unavailable data rather than presenting a failed request as an empty schedule.
 
 After a complete rotation, a short WOPR pattern-analysis sequence appears before the cycle begins again.
 
@@ -75,11 +78,12 @@ The application opens fullscreen and hides the mouse cursor. Press Escape to exi
 | --- | --- |
 | F1 | Strategic Status |
 | F2 | Airborne Tracking |
-| F3 | Signal Activity |
-| F4 | Weather + Space Weather |
-| F5 | Strategic Intelligence |
-| F6 | Orbital Surveillance |
-| F7 | SEC Football |
+| F3 | Military Identification |
+| F4 | Signal Activity |
+| F5 | Weather + Space Weather |
+| F6 | Strategic Intelligence |
+| F7 | SPACE WATCH |
+| F8 | SEC Football |
 | F12 | Save a PNG screenshot |
 | Escape | Exit |
 
@@ -94,7 +98,7 @@ The monitor uses lightweight public feeds and does not require API keys:
 - Public RSS sources for headlines
 - Yahoo Finance with a Stooq fallback for market movement
 - ESPN's public scoreboard data for college football
-- CelesTrak, SatNOGS, and AMSAT for orbital elements
+- CelesTrak and SatNOGS for station orbital elements, with a last-good local cache
 
 Every network request runs outside the display loop with a timeout. Failed feeds retain previous data where possible and report an unavailable or stale state instead of stopping the interface.
 
