@@ -14,9 +14,7 @@ not raw framebuffer captures.
 
 ![Airborne Tracking](screenshots/radar.png)
 
-![SPACE WATCH running on the Raspberry Pi display](space-watch-live.jpg)
-
-SPACE WATCH above is a photograph of the current program running on the Raspberry Pi. The status and radar previews were reconstructed from display photographs.
+![SPACE WATCH](space-watch-live.jpg)
 
 ## Screens
 
